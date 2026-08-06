@@ -19,9 +19,11 @@ static int topbar             = 1;        /* 0 means bottom bar */
 static int vertpad            = 15;       /* vertical gap between bar and screen edge */
 static int sidepad            = 15;       /* horizontal gap between bar and screen edge */
 static const int barvpad      = 8;        /* extra bar height so the islands read as pills */
+static const int barhpad      = 0;        /* extra padding either side of bar text, on top of the font-derived default */
 static const int barsplit     = 1;        /* 1 = split bar into tag and status islands */
 static const int barcornerradius = 11;    /* rounded corners on the bar islands, 0 = square */
 static const int barstep      = 40;       /* status island grows in steps of this many px */
+static const int wincornerradius = 0;     /* rounded corners on windows, 0 = leave them to the compositor */
 static char *fonts[]          = { "monospace:size=10", "NotoColorEmoji:pixelsize=10:antialias=true:autohint=true"  };
 /* catppuccin mocha defaults, matching what the xrdb mapping below produces
  * from ~/.config/x11/xresources, so the look is identical with or without xrdb */
@@ -168,10 +170,17 @@ static const Key keys[] = {
 	TAGKEYS(			XK_9,          8)
 	{ MODKEY,			XK_0,	       view,                   {.ui = ~0 } },
 	{ MODKEY|ShiftMask,		XK_0,	       tag,                    {.ui = ~0 } },
-	{ MODKEY,			XK_minus,      spawn,                  SHCMD("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-; kill -44 $(pidof dwmblocks)") },
-	{ MODKEY|ShiftMask,		XK_minus,      spawn,                  SHCMD("wpctl set-volume @DEFAULT_AUDIO_SINK@ 15%-; kill -44 $(pidof dwmblocks)") },
-	{ MODKEY,			XK_equal,      spawn,                  SHCMD("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+; kill -44 $(pidof dwmblocks)") },
-	{ MODKEY|ShiftMask,		XK_equal,      spawn,                  SHCMD("wpctl set-volume @DEFAULT_AUDIO_SINK@ 15%+; kill -44 $(pidof dwmblocks)") },
+/* Volume goes through mixer(8): the base system's audio is OSS, with no sound
+ * server to ask. mixer takes a relative value directly, so the unmute dance
+ * the pipewire bindings needed is gone.
+ *
+ * These keys resignal the status bar themselves. FreeBSD's kill(1) cannot
+ * name a real-time signal, and SIGRTMIN is 65 here rather than Linux's 34, so
+ * the volume module (signal 10) is signalled as 75 by number. */
+	{ MODKEY,			XK_minus,      spawn,                  SHCMD("mixer vol=-5; pkill -75 dwmblocks") },
+	{ MODKEY|ShiftMask,		XK_minus,      spawn,                  SHCMD("mixer vol=-15; pkill -75 dwmblocks") },
+	{ MODKEY,			XK_equal,      spawn,                  SHCMD("mixer vol=+5; pkill -75 dwmblocks") },
+	{ MODKEY|ShiftMask,		XK_equal,      spawn,                  SHCMD("mixer vol=+15; pkill -75 dwmblocks") },
 	{ MODKEY,			XK_BackSpace,  spawn,                  {.v = (const char*[]){ "sysact", NULL } } },
 	{ MODKEY|ShiftMask,		XK_BackSpace,  spawn,                  {.v = (const char*[]){ "sysact", NULL } } },
 
@@ -237,7 +246,7 @@ static const Key keys[] = {
 	{ MODKEY,			XK_n,          spawn,                  {.v = (const char*[]){ TERMINAL, "-e", "nvim", "-c", "VimwikiIndex", NULL } } },
 	{ MODKEY|ShiftMask,		XK_n,          spawn,                  SHCMD(TERMINAL " -e newsboat ; pkill -RTMIN+6 dwmblocks") },
 	{ MODKEY,			XK_m,          spawn,                  {.v = (const char*[]){ TERMINAL, "-e", "ncmpcpp", NULL } } },
-	{ MODKEY|ShiftMask,		XK_m,          spawn,                  SHCMD("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle; kill -44 $(pidof dwmblocks)") },
+	{ MODKEY|ShiftMask,		XK_m,          spawn,                  SHCMD("mixer vol.mute=^; pkill -75 dwmblocks") },
 	{ MODKEY,			XK_comma,      spawn,                  {.v = (const char*[]){ "mpc", "prev", NULL } } },
 	{ MODKEY|ShiftMask,		XK_comma,      spawn,                  {.v = (const char*[]){ "mpc", "seek", "0%", NULL } } },
 	{ MODKEY,			XK_period,     spawn,                  {.v = (const char*[]){ "mpc", "next", NULL } } },
@@ -257,7 +266,7 @@ static const Key keys[] = {
 	{ MODKEY,			XK_F1,         spawn,                  SHCMD("groff -mom /usr/local/share/dwm/larbs.mom -Tpdf | zathura -") },
 	{ MODKEY,			XK_F2,         spawn,                  {.v = (const char*[]){ "tutorialvids", NULL } } },
 	{ MODKEY,			XK_F3,         spawn,                  {.v = (const char*[]){ "displayselect", NULL } } },
-	{ MODKEY,			XK_F4,         spawn,                  SHCMD(TERMINAL " -e pulsemixer; kill -44 $(pidof dwmblocks)") },
+	{ MODKEY,			XK_F4,         spawn,                  SHCMD(TERMINAL " -e mixertui; pkill -75 dwmblocks") },
 	{ MODKEY,			XK_F5,         xrdb,                   {.v = NULL } },
 	{ MODKEY,			XK_F6,         spawn,                  {.v = (const char*[]){ "torwrap", NULL } } },
 	{ MODKEY,			XK_F7,         spawn,                  {.v = (const char*[]){ "td-toggle", NULL } } },
@@ -276,9 +285,9 @@ static const Key keys[] = {
 	{ MODKEY,			XK_Delete,     spawn,                  {.v = (const char*[]){ "dmenurecord", "kill", NULL } } },
 	{ MODKEY,			XK_Scroll_Lock, spawn,                 SHCMD("killall screenkey || screenkey &") },
 
-	{ 0, XF86XK_AudioMute,                         spawn,                  SHCMD("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle; kill -44 $(pidof dwmblocks)") },
-	{ 0, XF86XK_AudioRaiseVolume,                  spawn,                  SHCMD("wpctl set-volume @DEFAULT_AUDIO_SINK@ 0%- && wpctl set-volume @DEFAULT_AUDIO_SINK@ 3%+; kill -44 $(pidof dwmblocks)") },
-	{ 0, XF86XK_AudioLowerVolume,                  spawn,                  SHCMD("wpctl set-volume @DEFAULT_AUDIO_SINK@ 0%+ && wpctl set-volume @DEFAULT_AUDIO_SINK@ 3%-; kill -44 $(pidof dwmblocks)") },
+	{ 0, XF86XK_AudioMute,                         spawn,                  SHCMD("mixer vol.mute=^; pkill -75 dwmblocks") },
+	{ 0, XF86XK_AudioRaiseVolume,                  spawn,                  SHCMD("mixer vol=+3; pkill -75 dwmblocks") },
+	{ 0, XF86XK_AudioLowerVolume,                  spawn,                  SHCMD("mixer vol=-3; pkill -75 dwmblocks") },
 	{ 0, XF86XK_AudioPrev,                         spawn,                  {.v = (const char*[]){ "mpc", "prev", NULL } } },
 	{ 0, XF86XK_AudioNext,                         spawn,                  {.v = (const char*[]){ "mpc",  "next", NULL } } },
 	{ 0, XF86XK_AudioPause,                        spawn,                  {.v = (const char*[]){ "mpc", "pause", NULL } } },
@@ -302,8 +311,8 @@ static const Key keys[] = {
 	{ 0, XF86XK_TouchpadToggle,                    spawn,                  SHCMD("(synclient | grep 'TouchpadOff.*1' && synclient TouchpadOff=0) || synclient TouchpadOff=1") },
 	{ 0, XF86XK_TouchpadOff,                       spawn,                  {.v = (const char*[]){ "synclient", "TouchpadOff=1", NULL } } },
 	{ 0, XF86XK_TouchpadOn,                        spawn,                  {.v = (const char*[]){ "synclient", "TouchpadOff=0", NULL } } },
-	{ 0, XF86XK_MonBrightnessUp,                   spawn,                  {.v = (const char*[]){ "xbacklight", "-inc", "15", NULL } } },
-	{ 0, XF86XK_MonBrightnessDown,                 spawn,                  {.v = (const char*[]){ "xbacklight", "-dec", "15", NULL } } },
+	{ 0, XF86XK_MonBrightnessUp,                   spawn,                  {.v = (const char*[]){ "backlight", "incr", "15", NULL } } },
+	{ 0, XF86XK_MonBrightnessDown,                 spawn,                  {.v = (const char*[]){ "backlight", "decr", "15", NULL } } },
 
 	/* { MODKEY|Mod4Mask,           XK_h,          incrgaps,               {.i = +1 } }, */
 	/* { MODKEY|Mod4Mask,           XK_l,          incrgaps,               {.i = -1 } }, */

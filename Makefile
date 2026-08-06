@@ -27,14 +27,16 @@ dist: clean
 	gzip dwm-${VERSION}.tar
 	rm -rf dwm-${VERSION}
 
+# BSD install(1) has no -D, and the directories are created just above anyway,
+# so use plain -m. GNU install accepts this form too.
 install: all
 	mkdir -p ${DESTDIR}${PREFIX}/bin
-	install -Dm755 ./dwm ${DESTDIR}${PREFIX}/bin
+	install -m 755 ./dwm ${DESTDIR}${PREFIX}/bin
 	mkdir -p ${DESTDIR}${MANPREFIX}/man1
 	sed "s/VERSION/${VERSION}/g" < dwm.1 > ${DESTDIR}${MANPREFIX}/man1/dwm.1
 	chmod 644 ${DESTDIR}${MANPREFIX}/man1/dwm.1
 	mkdir -p ${DESTDIR}${PREFIX}/share/dwm
-	install -Dm644 ./larbs.mom ${DESTDIR}${PREFIX}/share/dwm
+	install -m 644 ./larbs.mom ${DESTDIR}${PREFIX}/share/dwm
 
 uninstall:
 	rm -f ${DESTDIR}${PREFIX}/bin/dwm\

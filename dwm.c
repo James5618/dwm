@@ -31,6 +31,13 @@
 #include <spawn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#ifdef __FreeBSD__
+/* The swallow patch walks the process tree to find the terminal that spawned
+ * a client. There is no /proc to read here, so getparentprocess() uses
+ * kinfo_getproc(3) from libutil, which returns a struct kinfo_proc. */
+#include <sys/user.h>
+#include <libutil.h>
+#endif /* __FreeBSD__ */
 #include <X11/cursorfont.h>
 #include <X11/keysym.h>
 #include <X11/Xatom.h>
@@ -108,6 +115,7 @@ struct Client {
 	int oldx, oldy, oldw, oldh;
 	int basew, baseh, incw, inch, maxw, maxh, minw, minh, hintsvalid;
 	int bw, oldbw;
+	int oshapew, oshapeh, oshapebw; /* geometry the corners were last shaped to */
 	unsigned int tags;
 	int isfixed, isfloating, isurgent, neverfocus, oldstate, isfullscreen, isterminal, noswallow, issticky;
 	pid_t pid;
@@ -205,6 +213,7 @@ static Monitor *dirtomon(int dir);
 static void drawbar(Monitor *m);
 static void drawbars(void);
 static void shapebar(Monitor *m);
+static void shapeclient(Client *c);
 static void xinitvisual(void);
 static void enternotify(XEvent *e);
 static void expose(XEvent *e);
@@ -527,6 +536,10 @@ swallow(Client *p, Client *c)
 	XConfigureWindow(dpy, p->win, CWBorderWidth, &wc);
 	XMoveResizeWindow(dpy, p->win, p->x, p->y, p->w, p->h);
 	XSetWindowBorder(dpy, p->win, scheme[SchemeNorm][ColBorder].pixel);
+	/* p->win is a different window now, at the same geometry, so the shape
+	 * cache describes the one that was just swapped out. */
+	p->oshapew = -1;
+	shapeclient(p);
 
 	arrange(p->mon);
 	configure(p);
@@ -552,6 +565,10 @@ unswallow(Client *c)
 	XConfigureWindow(dpy, c->win, CWBorderWidth, &wc);
 	XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
 	XSetWindowBorder(dpy, c->win, scheme[SchemeNorm][ColBorder].pixel);
+	/* likewise: the terminal's own window is back, and it is not the one the
+	 * cache remembers shaping */
+	c->oshapew = -1;
+	shapeclient(c);
 
 	setclientstate(c, NormalState);
 	focus(NULL);
@@ -1014,6 +1031,50 @@ shapebar(Monitor *m)
 }
 
 void
+shapeclient(Client *c)
+{
+	Region reg;
+
+	if (wincornerradius <= 0)
+		return;
+	/* A fullscreen window covers the screen edge to edge, so rounding it
+	 * would cut the wallpaper back in at the corners. Clear whatever shape
+	 * it carried before it went fullscreen. */
+	if (c->isfullscreen) {
+		XShapeCombineMask(dpy, c->win, ShapeBounding, 0, 0, None, ShapeSet);
+		c->oshapew = -1;
+		return;
+	}
+	/* Reshaping is not free - it makes the compositor rebuild the window, the
+	 * same reason shapebar() quantizes the status island - and arrange() runs
+	 * on every focus and tag change, mostly without moving anything. So skip
+	 * the windows already shaped to the size they are. Callers that swap
+	 * c->win out from under us clear this first. */
+	if (c->w == c->oshapew && c->h == c->oshapeh && c->bw == c->oshapebw)
+		return;
+	c->oshapew = c->w;
+	c->oshapeh = c->h;
+	c->oshapebw = c->bw;
+	/* The bounding shape is measured from the window origin, which sits
+	 * inside the border, so the border itself lies at negative coordinates.
+	 * Including it means X draws it around the rounded outline rather than
+	 * squaring the corners off again. Only the bounding shape is set: the
+	 * input shape stays rectangular, so a click just outside the curve still
+	 * lands on the window it looks like it belongs to.
+	 *
+	 * This is dwm's job here rather than the compositor's because picom can
+	 * only round corners on an OpenGL backend, and glx needs a DRM device
+	 * that FreeBSD no longer provides under VMware. A 1-bit mask has no
+	 * antialiasing, so these corners are a little stepped next to glx's -
+	 * but they are the same on every machine, with or without a compositor. */
+	reg = XCreateRegion();
+	addroundedrect(reg, -c->bw, -c->bw, c->w + 2 * c->bw, c->h + 2 * c->bw,
+		wincornerradius);
+	XShapeCombineRegion(dpy, c->win, ShapeBounding, 0, 0, reg, ShapeSet);
+	XDestroyRegion(reg);
+}
+
+void
 drawbars(void)
 {
 	Monitor *m;
@@ -1141,7 +1202,9 @@ int
 getdwmblockspid()
 {
 	char buf[16];
-	FILE *fp = popen("pidof -s dwmblocks", "r");
+	/* pidof(1) is Linux's psmisc and is not in the base system here; pgrep(1)
+	 * is, and -n picks the newest match the way pidof -s picks one. */
+	FILE *fp = popen("pgrep -n -x dwmblocks", "r");
 	fgets(buf, sizeof(buf), fp);
 	pid_t pid = strtoul(buf, NULL, 10);
 	pclose(fp);
@@ -1605,6 +1668,12 @@ resize(Client *c, int x, int y, int w, int h, int interact)
 {
 	if (applysizehints(c, &x, &y, &w, &h, interact))
 		resizeclient(c, x, y, w, h);
+	else
+		/* Nothing moved, so resizeclient() is not called and the corners
+		 * would never be shaped at all - which is what a window carried
+		 * across a dwm restart looks like. It is already the right size;
+		 * it just has not been shaped to it yet. */
+		shapeclient(c);
 }
 
 void
@@ -1618,6 +1687,7 @@ resizeclient(Client *c, int x, int y, int w, int h)
 	c->oldh = c->h; c->h = wc.height = h;
 	wc.border_width = c->bw;
 	XConfigureWindow(dpy, c->win, CWX|CWY|CWWidth|CWHeight|CWBorderWidth, &wc);
+	shapeclient(c);
 	configure(c);
 	XSync(dpy, False);
 }
@@ -1717,7 +1787,9 @@ run(void)
 
 void
 runAutostart(void) {
-	system("killall -q dwmblocks; dwmblocks &");
+	/* BSD killall(1) has no -q, and an unknown option would leave the old
+	 * status bar running alongside the new one. pkill is quiet already. */
+	system("pkill -x dwmblocks; dwmblocks &");
 }
 
 void
@@ -1919,7 +1991,10 @@ setup(void)
 	drw = drw_create(dpy, screen, root, sw, sh, visual, visdepth, cmap);
 	if (!drw_fontset_create(drw, fonts, LENGTH(fonts)))
 		die("no fonts could be loaded.");
-	lrpad = drw->fonts->h;
+	/* Horizontal text padding is derived from the font height, so it moves
+	 * with the font rather than tracking barvpad - and it lands a pixel apart
+	 * between machines whose font builds differ. barhpad tunes it directly. */
+	lrpad = drw->fonts->h + barhpad;
 	bh = drw->fonts->h + 2 + barvpad;
 	sp = sidepad;
 	vp = (topbar == 1) ? vertpad : -vertpad;
@@ -2222,6 +2297,8 @@ unmanage(Client *c, int destroyed)
 		XSetErrorHandler(xerrordummy);
 		XSelectInput(dpy, c->win, NoEventMask);
 		XConfigureWindow(dpy, c->win, CWBorderWidth, &wc); /* restore border */
+		if (wincornerradius > 0) /* and the square corners it came with */
+			XShapeCombineMask(dpy, c->win, ShapeBounding, 0, 0, None, ShapeSet);
 		XUngrabButton(dpy, AnyButton, AnyModifier, c->win);
 		setclientstate(c, WithdrawnState);
 		XSync(dpy, False);
