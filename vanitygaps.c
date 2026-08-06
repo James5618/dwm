@@ -413,7 +413,7 @@ deck(Monitor *m)
 
 	getfacts(m, mh, sh, &mfacts, &sfacts, &mrest, &srest);
 
-	if (n - m->nmaster > 0) /* override layout symbol */
+	if (n - m->nmaster > 0) /* override layout symbol: initial, and how many are decked */
 		snprintf(m->ltsymbol, sizeof m->ltsymbol, "D %d", n - m->nmaster);
 
 	for (i = 0, c = nexttiled(m->clients); c; c = nexttiled(c->next), i++)

@@ -154,6 +154,7 @@ struct Monitor {
 	Window barwin;
 	int bleftw, brightw;   /* current bar island widths */
 	int obleftw, obrightw; /* island widths at last shaping */
+	int obw;               /* bar width at last shaping */
 	const Layout *lt[2];
 };
 
@@ -351,6 +352,16 @@ static xcb_connection_t *xcon;
 
 /* compile-time check if all tags fit into an unsigned int bit array. */
 struct NumTags { char limitexceeded[LENGTH(tags) > 31 ? -1 : 1]; };
+
+/* Tag labels are "N name" built from constants, and their widths never change
+ * once the font is loaded - xrdb() reloads colours only. Building them in
+ * drawbar() meant a snprintf and a full Xft text layout per tag on every
+ * redraw, and drawbar() redraws on every status tick, which sb-nettraf makes
+ * once a second. They are built once in setup() instead. Keeping the widths in
+ * one place also stops drawbar() and buttonpress() from disagreeing about how
+ * wide a tag is, which would put clicks on the wrong tag. */
+static char taglabel[LENGTH(tags)][64];
+static int taglabelw[LENGTH(tags)];
 
 /* function implementations */
 void
@@ -575,7 +586,6 @@ buttonpress(XEvent *e)
 		focus(NULL);
 	}
 	if (ev->window == selmon->barwin) {
-		char taglabel[64];
 		i = 0;
 		x = barcornerradius;
 		for (c = m->clients; c; c = c->next)
@@ -584,8 +594,7 @@ buttonpress(XEvent *e)
 			/* do not reserve space for vacant tags */
 			if (!(occ & 1 << i || m->tagset[m->seltags] & 1 << i))
 				continue;
-			snprintf(taglabel, sizeof taglabel, "%d %s", i + 1, tags[i]);
-			x += TEXTW(taglabel);
+			x += taglabelw[i];
 		} while (ev->x >= x && ++i < LENGTH(tags));
 		if (i < LENGTH(tags)) {
 			click = ClkTagBar;
@@ -890,7 +899,6 @@ drawbar(Monitor *m)
 	int boxs = drw->fonts->h / 9;
 	int boxw = drw->fonts->h / 6 + 2;
 	unsigned int i, occ = 0, urg = 0;
-	char taglabel[64];
 	Client *c;
 
 	if(!m->showbar)
@@ -918,10 +926,9 @@ drawbar(Monitor *m)
 		if (!(occ & 1 << i || m->tagset[m->seltags] & 1 << i))
 		continue;
 
-		snprintf(taglabel, sizeof taglabel, "%d %s", i + 1, tags[i]);
-		w = TEXTW(taglabel);
+		w = taglabelw[i];
 		drw_setscheme(drw, scheme[m->tagset[m->seltags] & 1 << i ? SchemeSel : SchemeNorm]);
-		drw_text(drw, x, 0, w, bh, lrpad / 2, taglabel, urg & 1 << i);
+		drw_text(drw, x, 0, w, bh, lrpad / 2, taglabel[i], urg & 1 << i);
 		x += w;
 	}
 	w = TEXTW(m->ltsymbol);
@@ -992,10 +999,16 @@ shapebar(Monitor *m)
 	right = m->brightw ? (m->brightw + barstep - 1) / barstep * barstep : 0;
 	if (right > bw)
 		right = bw;
-	if (m->bleftw == m->obleftw && right == m->obrightw)
+	/* bw is part of the key: the right island is placed at bw - right, so a
+	 * resolution change moves it even when neither island changed width.
+	 * Without this the bar keeps the shape it had at the old width, and on a
+	 * narrower screen the status island is shaped off the end of the window
+	 * and disappears until a tag or status change happens to reshape it. */
+	if (m->bleftw == m->obleftw && right == m->obrightw && bw == m->obw)
 		return;
 	m->obleftw = m->bleftw;
 	m->obrightw = right;
+	m->obw = bw;
 	reg = XCreateRegion();
 	/* split into left (tags+layout) and right (status) islands unless they
 	 * would collide, in which case fall back to one full-width island */
@@ -1140,13 +1153,20 @@ getatomprop(Client *c, Atom prop)
 int
 getdwmblockspid()
 {
-	char buf[16];
+	/* When dwmblocks is not running pidof prints nothing and fgets leaves buf
+	 * untouched. Reading it uninitialised could yield any pid at all, and the
+	 * caller sigqueues SIGUSR1 to it - whose default action is to terminate.
+	 * Clicking the bar with dwmblocks stopped could kill an unrelated
+	 * process. */
+	char buf[16] = {0};
 	FILE *fp = popen("pidof -s dwmblocks", "r");
-	fgets(buf, sizeof(buf), fp);
-	pid_t pid = strtoul(buf, NULL, 10);
+	if (!fp)
+		return -1;
+	if (!fgets(buf, sizeof(buf), fp))
+		buf[0] = '\0';
 	pclose(fp);
-	dwmblockspid = pid;
-	return pid != 0 ? 0 : -1;
+	dwmblockspid = strtoul(buf, NULL, 10);
+	return dwmblockspid != 0 ? 0 : -1;
 }
 #endif
 
@@ -1420,8 +1440,8 @@ monocle(Monitor *m)
 
 	getgaps(m, &oh, &ov, &ih, &iv, &n);
 
-	if (n > 0) /* override layout symbol */
-		snprintf(m->ltsymbol, sizeof m->ltsymbol, "[%d]", n);
+	if (n > 0) /* override layout symbol: initial, and how many are stacked */
+		snprintf(m->ltsymbol, sizeof m->ltsymbol, "M %d", n);
 	for (c = nexttiled(m->clients); c; c = nexttiled(c->next))
 		resize(c, m->wx + ov, m->wy + oh, m->ww - 2 * c->bw - 2 * ov, m->wh - 2 * c->bw - 2 * oh, 0);
 }
@@ -1923,6 +1943,11 @@ setup(void)
 	bh = drw->fonts->h + 2 + barvpad;
 	sp = sidepad;
 	vp = (topbar == 1) ? vertpad : -vertpad;
+	/* needs the font, so it has to follow drw_fontset_create */
+	for (i = 0; i < LENGTH(tags); i++) {
+		snprintf(taglabel[i], sizeof taglabel[i], "%d", i + 1);
+		taglabelw[i] = TEXTW(taglabel[i]);
+	}
 	updategeom();
 	/* init atoms */
 	utf8string = XInternAtom(dpy, "UTF8_STRING", False);

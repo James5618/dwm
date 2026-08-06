@@ -58,6 +58,9 @@ static Sp scratchpads[] = {
 };
 
 /* tagging */
+/* The bar labels tags by number only; these names are kept because the length
+ * of this array is what sets the tag count, and to document what each tag is
+ * for. To show them again, put the name back in the label format in setup(). */
 static const char *tags[] = { "term", "web", "fmg", "mus", "disc", "nvim", "doc", "misc", "gfx" };
 
 static const Rule rules[] = {
@@ -82,21 +85,28 @@ static int resizehints = 0;    /* 1 means respect size hints in tiled resizals *
 static const int lockfullscreen = 1; /* 1 will force focus on the fullscreen window */
 #define FORCE_VSPLIT 1  /* nrowgrid layout: force two clients to always split vertically */
 #include "vanitygaps.c"
+/* The bar prints this verbatim, so these are initials rather than the stock
+ * suckless glyphs: "[]=" and "><>" say nothing about what the layout does.
+ * Four pairs share a first letter - stack/spiral, deck/dwindle,
+ * centered/centerfloat, and float - so the one that would collide takes a
+ * second letter. Keep them under 16 characters, the size of Monitor.ltsymbol,
+ * and remember deck and monocle rewrite their own at runtime to append a
+ * window count. */
 static const Layout layouts[] = {
 	/* symbol     arrange function */
-	{ "[]=",	tile },	                /* Default: Master on left, slaves on right */
-	{ "TTT",	bstack },               /* Master on top, slaves on bottom */
+	{ "T",		tile },	                /* Default: Master on left, slaves on right */
+	{ "S",		bstack },               /* Master on top, slaves on bottom */
 
-	{ "[@]",	spiral },               /* Fibonacci spiral */
-	{ "[\\]",	dwindle },              /* Decreasing in size right and leftward */
+	{ "Sp",		spiral },               /* Fibonacci spiral */
+	{ "Dw",		dwindle },              /* Decreasing in size right and leftward */
 
-	{ "[D]",	deck },	                /* Master on left, slaves in monocle-like mode on right */
-	{ "[M]",	monocle },              /* All windows on top of eachother */
+	{ "D",		deck },	                /* Master on left, slaves in monocle-like mode on right */
+	{ "M",		monocle },              /* All windows on top of eachother */
 
-	{ "|M|",	centeredmaster },               /* Master in middle, slaves on sides */
-	{ ">M>",	centeredfloatingmaster },       /* Same but master floats */
+	{ "C",		centeredmaster },               /* Master in middle, slaves on sides */
+	{ "Cf",		centeredfloatingmaster },       /* Same but master floats */
 
-	{ "><>",	NULL },	                /* no layout function means floating behavior */
+	{ "F",		NULL },	                /* no layout function means floating behavior */
 	{ NULL,		NULL },
 };
 
